@@ -9,6 +9,18 @@ use snafu::Snafu;
 
 pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
+/// Check if error message matches one of the 5 target scenarios
+fn should_add_lbstest_suffix(msg: &str) -> bool {
+    // Scenario 1: Table not found
+    msg.contains("Table '") && msg.contains("' was not found")
+    // Scenario 2 & 3: Column not found (filter & delete)
+    || msg.contains("No field named")
+    // Scenario 4: Column not found for index
+    || msg.contains("Unable to get field named")
+    // Scenario 5: Dimension mismatch
+    || (msg.contains("query dim") && msg.contains("doesn't match"))
+}
+
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
@@ -16,7 +28,7 @@ pub enum Error {
     InvalidTableName { name: String, reason: String },
     #[snafu(display("Invalid input, {message}"))]
     InvalidInput { message: String },
-    #[snafu(display("Table '{name}' was not found"))]
+    #[snafu(display("Table '{name}' was not found lbstesthhhh"))]
     TableNotFound { name: String, source: BoxError },
     #[snafu(display("Database '{name}' was not found"))]
     DatabaseNotFound { name: String },
@@ -97,8 +109,18 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl From<ArrowError> for Error {
     fn from(source: ArrowError) -> Self {
         match source {
-            ArrowError::ExternalError(source) => Self::from_box_error(source),
-            _ => Self::Arrow { source },
+            ArrowError::ExternalError(src) => Self::from_box_error(src),
+            other => {
+                // Check if this is the column not found error (scenario 4)
+                let msg = other.to_string();
+                if should_add_lbstest_suffix(&msg) {
+                    Self::Arrow {
+                        source: ArrowError::SchemaError(format!("{} lbstesthhhh", msg)),
+                    }
+                } else {
+                    Self::Arrow { source: other }
+                }
+            }
         }
     }
 }
@@ -121,7 +143,18 @@ impl From<lance::Error> for Error {
         match source {
             lance::Error::Wrapped { error, .. } => Self::from_box_error(error),
             lance::Error::External { source } => Self::from_box_error(source),
-            _ => Self::Lance { source },
+            other => {
+                // Check if we need to add suffix
+                let msg = other.to_string();
+                if should_add_lbstest_suffix(&msg) {
+                    // Use Runtime error to carry the modified message
+                    Self::Runtime {
+                        message: format!("{} lbstesthhhh", msg),
+                    }
+                } else {
+                    Self::Lance { source: other }
+                }
+            }
         }
     }
 }
